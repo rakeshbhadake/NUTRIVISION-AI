@@ -1,0 +1,34 @@
+name: Validate NutriVision
+on: [push, pull_request]
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [django_api, fastapi_ai, flask_integrations]
+    defaults:
+      run:
+        working-directory: backend/${{ matrix.service }}
+    env:
+      USE_SQLITE: 'true'
+      DJANGO_DEBUG: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - if: matrix.service == 'django_api'
+        run: python manage.py check && python manage.py makemigrations --check --dry-run

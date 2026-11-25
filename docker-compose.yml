@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nutrivision}
+      POSTGRES_USER: ${POSTGRES_USER:-nutrivision}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  ai:
+    build: ./backend/fastapi_ai
+    env_file: .env
+    expose: ["8001"]
+    restart: unless-stopped
+  integrations:
+    build: ./backend/flask_integrations
+    env_file: .env
+    environment:
+      WEBHOOK_DATABASE_PATH: /data/webhooks.sqlite3
+    expose: ["8002"]
+    volumes:
+      - integration_data:/data
+    restart: unless-stopped
+  django:
+    build: ./backend/django_api
+    env_file: .env
+    environment:
+      USE_SQLITE: 'false'
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nutrivision}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nutrivision}
+      REDIS_URL: redis://redis:6379/0
+      AI_SERVICE_URL: http://ai:8001
+      INTEGRATIONS_SERVICE_URL: http://integrations:8002
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - private_media:/service/private_media
+      - static_files:/service/staticfiles
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      ai: { condition: service_started }
+      integrations: { condition: service_started }
+    restart: unless-stopped
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    environment:
+      DJANGO_PROXY_URL: http://django:8000
+    ports: ["127.0.0.1:5173:5173"]
+    depends_on: [django]
+volumes:
+  postgres_data:
+  redis_data:
+  integration_data:
+  private_media:
+  static_files:
